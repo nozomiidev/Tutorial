@@ -55,6 +55,31 @@ jobs:
           node --check playwright.config.mjs
           node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
 
+      - name: Resolve and verify the pinned community tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          node - <<'NODE'
+          const playwright = require('./node_modules/@playwright/test/package.json');
+          const unityServer = require('./node_modules/@yaegaki/unity-http-server/package.json');
+          if (playwright.version !== '1.62.0') {
+            throw new Error(`unexpected Playwright version: ${playwright.version}`);
+          }
+          if (unityServer.version !== '0.0.2') {
+            throw new Error(`unexpected unity-http-server version: ${unityServer.version}`);
+          }
+          const serverBin = typeof unityServer.bin === 'string'
+            ? unityServer.bin
+            : unityServer.bin?.['unity-http-server'];
+          if (!serverBin) throw new Error('unity-http-server CLI entrypoint is missing');
+          console.log({ playwright: playwright.version, unityHttpServer: unityServer.version, serverBin });
+          NODE
+          test -x node_modules/.bin/playwright
+          test -x node_modules/.bin/unity-http-server
+          node_modules/.bin/playwright --version
+          npm ls --depth=0
+
       - name: Parse both workflow files as YAML
         shell: bash
         run: |
@@ -153,6 +178,7 @@ jobs:
             echo '- Unity version is 6000.0.32f1.'
             echo '- All five selected scenes and GUIDs match upstream.'
             echo '- JavaScript, JSON, and workflow YAML parse successfully.'
+            echo '- Pinned Playwright and Unity WebGL server packages resolve with CLI entrypoints.'
             echo '- No gameplay source, Unity scene/prefab, artwork, or audio was added.'
             echo '- Unity execution remains a separate licensed-machine gate.'
           } >> "$GITHUB_STEP_SUMMARY"
