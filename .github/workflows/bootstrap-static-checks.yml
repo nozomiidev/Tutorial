@@ -1,0 +1,158 @@
+name: Bootstrap static checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [agent/unity-touhou-bootstrap-20260728]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-static-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPOSITORY: Bagoum/danmokou
+  UPSTREAM_COMMIT: cd21229fbce6deddfad360497ead6263c04ba6cf
+  EXPECTED_UNITY_VERSION: 6000.0.32f1
+
+jobs:
+  validate-reuse-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout bootstrap with history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout only the pinned upstream evidence
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ProjectSettings/ProjectVersion.txt
+            ProjectSettings/EditorBuildSettings.asset
+            Assets/Danmokou/MiniProjects/Projects/THJam13/THJ13 Main Menu.unity
+            Assets/Danmokou/MiniProjects/Projects/THJam13/THJ13 Level.unity
+            Assets/Danmokou/Scenes/Generic/BaseLevel.unity
+            Assets/Danmokou/Scenes/Generic/Endcard.unity
+            Assets/Danmokou/Scenes/Generic/ReplaySave.unity
+
+      - name: Validate JavaScript and JSON syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check e2e/webgl.spec.mjs
+          node --check playwright.config.mjs
+          node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
+
+      - name: Parse both workflow files as YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "parsed #{path}" }' \
+            .github/workflows/bootstrap-static-checks.yml \
+            .github/workflows/unity-webgl-research.yml
+
+      - name: Verify the upstream lock and Unity version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C upstream rev-parse HEAD)" = "$UPSTREAM_COMMIT"
+          grep -F "m_EditorVersion: $EXPECTED_UNITY_VERSION" \
+            upstream/ProjectSettings/ProjectVersion.txt
+
+      - name: Verify every selected scene already exists upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f 'upstream/Assets/Danmokou/MiniProjects/Projects/THJam13/THJ13 Main Menu.unity'
+          test -f 'upstream/Assets/Danmokou/MiniProjects/Projects/THJam13/THJ13 Level.unity'
+          test -f 'upstream/Assets/Danmokou/Scenes/Generic/BaseLevel.unity'
+          test -f 'upstream/Assets/Danmokou/Scenes/Generic/Endcard.unity'
+          test -f 'upstream/Assets/Danmokou/Scenes/Generic/ReplaySave.unity'
+          test "$(grep -c 'enabled: 1' overlay/ProjectSettings/EditorBuildSettings.asset)" -eq 5
+
+      - name: Match overlay scene paths and GUIDs to upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def scene_pairs(path: str) -> dict[str, str]:
+              lines = Path(path).read_text(encoding="utf-8").splitlines()
+              result: dict[str, str] = {}
+              for index, line in enumerate(lines):
+                  path_match = re.match(r"\s*path:\s*(.+?)\s*$", line)
+                  if not path_match:
+                      continue
+                  scene_path = path_match.group(1)
+                  for following in lines[index + 1:index + 5]:
+                      guid_match = re.match(r"\s*guid:\s*([0-9a-f]+)\s*$", following)
+                      if guid_match:
+                          result[scene_path] = guid_match.group(1)
+                          break
+              return result
+
+          overlay = scene_pairs("overlay/ProjectSettings/EditorBuildSettings.asset")
+          upstream = scene_pairs("upstream/ProjectSettings/EditorBuildSettings.asset")
+          if len(overlay) != 5:
+              raise SystemExit(f"expected 5 overlay scenes, found {len(overlay)}")
+          mismatches = {
+              path: (guid, upstream.get(path))
+              for path, guid in overlay.items()
+              if upstream.get(path) != guid
+          }
+          if mismatches:
+              raise SystemExit(f"scene path/GUID mismatch: {mismatches}")
+          print("all five selected scene GUIDs match the pinned completed game")
+          PY
+
+      - name: Enforce the zero-gameplay-code diff boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          mapfile -t changed < <(git diff --name-only origin/main...HEAD)
+          printf '%s\n' "${changed[@]}"
+
+          for file in "${changed[@]}"; do
+            case "$file" in
+              .github/workflows/*|README.md|docs/*|e2e/*|overlay/ProjectSettings/EditorBuildSettings.asset|package.json|playwright.config.mjs)
+                ;;
+              *)
+                echo "::error file=$file::Unexpected file outside the thin bootstrap boundary"
+                exit 1
+                ;;
+            esac
+          done
+
+          if printf '%s\n' "${changed[@]}" | grep -E '\.(cs|bdsl|unity|prefab|png|jpe?g|webp|psd|wav|ogg|mp3|flac|fbx|blend)$'; then
+            echo '::error::Gameplay source, Unity content, artwork, or audio was added instead of reused.'
+            exit 1
+          fi
+
+      - name: Write validation summary
+        shell: bash
+        run: |
+          {
+            echo '## Zero-design bootstrap validation'
+            echo
+            echo '- Pinned completed game commit exists.'
+            echo '- Unity version is 6000.0.32f1.'
+            echo '- All five selected scenes and GUIDs match upstream.'
+            echo '- JavaScript, JSON, and workflow YAML parse successfully.'
+            echo '- No gameplay source, Unity scene/prefab, artwork, or audio was added.'
+            echo '- Unity execution remains a separate licensed-machine gate.'
+          } >> "$GITHUB_STEP_SUMMARY"
