@@ -1,0 +1,215 @@
+name: Unity WebGL research build
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Run the upstream EditMode and PlayMode tests
+        required: true
+        type: boolean
+        default: true
+      run_e2e:
+        description: Serve the WebGL artifact and run the Chromium smoke test
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: unity-webgl-research-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPOSITORY: Bagoum/danmokou
+  UPSTREAM_COMMIT: cd21229fbce6deddfad360497ead6263c04ba6cf
+  EXPECTED_UNITY_VERSION: 6000.0.32f1
+
+jobs:
+  test-build-and-observe:
+    name: Reuse THJam13 without gameplay code
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout thin bootstrap
+        uses: actions/checkout@v6
+
+      - name: Checkout pinned completed game
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: game
+          fetch-depth: 1
+          submodules: recursive
+          lfs: true
+          persist-credentials: false
+
+      - name: Verify source lock and apply declarative scene selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_commit="$(git -C game rev-parse HEAD)"
+          test "$actual_commit" = "$UPSTREAM_COMMIT"
+          grep -F "m_EditorVersion: $EXPECTED_UNITY_VERSION" game/ProjectSettings/ProjectVersion.txt
+          cp -a overlay/. game/
+
+          mkdir -p artifacts/bootstrap
+          {
+            echo "upstream=$UPSTREAM_REPOSITORY"
+            echo "commit=$actual_commit"
+            echo "unity=$EXPECTED_UNITY_VERSION"
+            echo "sample=Assets/Danmokou/MiniProjects/Projects/THJam13"
+            echo "mode=research-only"
+          } | tee artifacts/bootstrap/source-lock.txt
+
+          git -C game diff -- ProjectSettings/EditorBuildSettings.asset \
+            > artifacts/bootstrap/editor-build-settings.patch
+          find game -type f \( -iname 'LICENSE' -o -iname 'LICENSE.*' -o -iname '*LICENSE*.md' \) \
+            -print | sort > artifacts/bootstrap/license-files.txt
+
+      - name: Report Unity licensing prerequisite
+        shell: bash
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        run: |
+          if [[ -z "${UNITY_LICENSE:-}" && -z "${UNITY_SERIAL:-}" ]]; then
+            echo '::warning::Configure the GameCI Unity license secrets before expecting test/build success.'
+          fi
+
+      - name: Cache imported Unity Library
+        uses: actions/cache@v4
+        with:
+          path: game/Library
+          key: Library-Danmokou-${{ runner.os }}-${{ hashFiles('game/ProjectSettings/ProjectVersion.txt', 'game/Packages/manifest.json', 'game/Packages/packages-lock.json') }}
+          restore-keys: |
+            Library-Danmokou-${{ runner.os }}-
+
+      - name: Run existing Unity tests
+        if: ${{ inputs.run_tests }}
+        id: unity_tests
+        uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          projectPath: game
+          unityVersion: auto
+          testMode: All
+          artifactsPath: artifacts/unity-tests
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: Danmokou existing EditMode and PlayMode tests
+
+      - name: Upload Unity test evidence
+        if: ${{ always() && inputs.run_tests }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-tests
+          path: artifacts/unity-tests
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Build the selected existing scenes for WebGL
+        uses: game-ci/unity-builder@v5.0.0
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          projectPath: game
+          unityVersion: auto
+          targetPlatform: WebGL
+          allowDirtyBuild: true
+
+      - name: Upload private research WebGL build
+        uses: actions/upload-artifact@v4
+        with:
+          name: webgl-research-build
+          path: build
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Set up Node for browser observation
+        if: ${{ inputs.run_e2e }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package.json
+
+      - name: Install pinned E2E tools and Chromium
+        if: ${{ inputs.run_e2e }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Locate and serve the generated Unity HTML
+        if: ${{ inputs.run_e2e }}
+        id: serve_webgl
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/e2e
+          html_file="$(find build -type f -name '*.html' -print -quit)"
+          test -n "$html_file"
+          webgl_dir="$(dirname "$html_file")"
+          html_name="$(basename "$html_file")"
+          webgl_url="http://127.0.0.1:4173/$html_name"
+
+          ./node_modules/.bin/http-server "$webgl_dir" \
+            -a 127.0.0.1 -p 4173 -b -c-1 \
+            > artifacts/e2e/http-server.log 2>&1 &
+          echo $! > artifacts/e2e/http-server.pid
+
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$webgl_url" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent "$webgl_url" >/dev/null
+          echo "WEBGL_URL=$webgl_url" >> "$GITHUB_ENV"
+          echo "url=$webgl_url" >> "$GITHUB_OUTPUT"
+
+      - name: Observe Canvas, controls, errors, and screenshots
+        if: ${{ inputs.run_e2e }}
+        env:
+          WEBGL_URL: ${{ steps.serve_webgl.outputs.url }}
+        run: npm run e2e
+
+      - name: Stop local WebGL server
+        if: ${{ always() && inputs.run_e2e }}
+        shell: bash
+        run: |
+          if [[ -f artifacts/e2e/http-server.pid ]]; then
+            kill "$(cat artifacts/e2e/http-server.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload WebGL browser evidence
+        if: ${{ always() && inputs.run_e2e }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: webgl-e2e
+          path: |
+            artifacts/e2e
+            playwright-report
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload source and license inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-lock-and-license-inventory
+          path: artifacts/bootstrap
+          if-no-files-found: error
+          retention-days: 30
