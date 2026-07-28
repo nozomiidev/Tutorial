@@ -164,10 +164,10 @@ jobs:
           html_name="$(basename "$html_file")"
           webgl_url="http://127.0.0.1:4173/$html_name"
 
-          ./node_modules/.bin/http-server "$webgl_dir" \
-            -a 127.0.0.1 -p 4173 -b -c-1 \
-            > artifacts/e2e/http-server.log 2>&1 &
-          echo $! > artifacts/e2e/http-server.pid
+          ./node_modules/.bin/unity-http-server "$webgl_dir" \
+            -a 127.0.0.1 -p 4173 \
+            > artifacts/e2e/unity-http-server.log 2>&1 &
+          echo $! > artifacts/e2e/unity-http-server.pid
 
           for attempt in $(seq 1 60); do
             if curl --fail --silent "$webgl_url" >/dev/null; then
@@ -189,8 +189,8 @@ jobs:
         if: ${{ always() && inputs.run_e2e }}
         shell: bash
         run: |
-          if [[ -f artifacts/e2e/http-server.pid ]]; then
-            kill "$(cat artifacts/e2e/http-server.pid)" 2>/dev/null || true
+          if [[ -f artifacts/e2e/unity-http-server.pid ]]; then
+            kill "$(cat artifacts/e2e/unity-http-server.pid)" 2>/dev/null || true
           fi
 
       - name: Upload WebGL browser evidence
