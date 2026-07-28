@@ -36,7 +36,8 @@
 - [x] THJam13 のメニュー／レベル／共通シーンを Build Settings に固定
 - [x] Unity tests → WebGL build → browser E2E の流れを定義
 - [x] ライセンス／公開ゲートを定義
-- [ ] Unity ライセンス secrets を設定して CI 実行
+- [x] GitHub Actions で固定コミット、Unity版、既存5シーンの path/GUID、JS/JSON/YAML、npm依存、ゼロゲームプレイコード境界を検証
+- [ ] Unity ライセンス secrets を設定して Unity CI を実行
 - [ ] Unity Editor 実機でスクリーンショット採取
 - [ ] キャラクター素材を許諾済み候補へ Inspector 差し替え
 - [ ] 全素材を GREEN にして無料 Web 配布を承認
