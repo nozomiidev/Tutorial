@@ -92,6 +92,7 @@ jobs:
       - name: Run existing Unity tests
         if: ${{ inputs.run_tests }}
         id: unity_tests
+        continue-on-error: true
         uses: game-ci/unity-test-runner@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -141,8 +142,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package.json
 
       - name: Install pinned E2E tools and Chromium
         if: ${{ inputs.run_e2e }}
@@ -213,3 +212,10 @@ jobs:
           path: artifacts/bootstrap
           if-no-files-found: error
           retention-days: 30
+
+      - name: Mark the run failed when existing Unity tests failed
+        if: ${{ always() && inputs.run_tests && steps.unity_tests.outcome != 'success' }}
+        shell: bash
+        run: |
+          echo '::error::The existing Unity test suite failed. Build and browser evidence were still collected when possible.'
+          exit 1
