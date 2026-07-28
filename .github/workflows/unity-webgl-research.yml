@@ -28,8 +28,26 @@ env:
   EXPECTED_UNITY_VERSION: 6000.0.32f1
 
 jobs:
+  rights-gate:
+    name: Keep un-audited game artifacts private
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Refuse execution from a public repository
+        shell: bash
+        env:
+          REPOSITORY_IS_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          if [[ "$REPOSITORY_IS_PRIVATE" != "true" ]]; then
+            echo '::error::The asset ledger is not GREEN. Run this workflow only in a private repository/private fork, or run the Unity runbook locally.'
+            exit 1
+          fi
+          echo 'Private research environment confirmed.'
+
   test-build-and-observe:
     name: Reuse THJam13 without gameplay code
+    needs: rights-gate
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
