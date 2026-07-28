@@ -23,10 +23,11 @@
 
 ## 最短実行
 
-1. GitHub Actions 用に Unity ライセンス secrets を登録します。
-2. Actions から `Unity WebGL research build` を手動実行します。
-3. `unity-tests`、`webgl-research-build`、`webgl-e2e` の成果物を確認します。
-4. 公開は `docs/ASSET_AND_RELEASE_GATE.md` がすべて GREEN になるまで行いません。
+1. 素材台帳が GREEN になる前は、ローカル環境または private repository / private fork だけを使います。Unity ワークフローは公開リポジトリでの実行を拒否します。
+2. GitHub Actions 用に Unity ライセンス secrets を登録します。
+3. Actions から `Unity WebGL research build` を手動実行します。
+4. `unity-tests`、`webgl-research-build`、`webgl-e2e` の成果物を確認します。
+5. 公開は `docs/ASSET_AND_RELEASE_GATE.md` がすべて GREEN になるまで行いません。
 
 ローカル作業は `docs/UNITY_GUI_RUNBOOK.md` に固定しています。CI は上流を毎回クリーンに取得するため、このリポジトリへ巨大な Unity プロジェクトや第三者バイナリ素材を複製しません。
 
@@ -37,7 +38,8 @@
 - [x] Unity tests → WebGL build → browser E2E の流れを定義
 - [x] ライセンス／公開ゲートを定義
 - [x] GitHub Actions で固定コミット、Unity版、既存5シーンの path/GUID、JS/JSON/YAML、npm依存、ゼロゲームプレイコード境界を検証
-- [ ] Unity ライセンス secrets を設定して Unity CI を実行
+- [x] 素材監査前の Unity build / screenshot artifact を公開リポジトリから生成しない権利ゲートを実装
+- [ ] private Unity 実行環境にライセンス secrets を設定して Unity CI を実行
 - [ ] Unity Editor 実機でスクリーンショット採取
 - [ ] キャラクター素材を許諾済み候補へ Inspector 差し替え
 - [ ] 全素材を GREEN にして無料 Web 配布を承認
